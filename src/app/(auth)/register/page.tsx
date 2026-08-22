@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useFormState } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -9,6 +9,14 @@ import { SubmitButton, FormError } from "@/components/form";
 import { clsx } from "clsx";
 
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="card p-6 text-sm text-slate-500">Loading…</div>}>
+      <RegisterForm />
+    </Suspense>
+  );
+}
+
+function RegisterForm() {
   const params = useSearchParams();
   const initialRole = (params.get("role") ?? "buyer").toUpperCase() === "SELLER" ? "SELLER" : "BUYER";
   const [role, setRole] = useState<"SELLER" | "BUYER">(initialRole);
