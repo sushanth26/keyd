@@ -15,9 +15,13 @@ export const metadata: Metadata = buildMetadata({
   path: "/",
 });
 
+const isNextBuild =
+  process.env.NEXT_PHASE === "phase-production-build" ||
+  process.env.npm_lifecycle_event === "build";
+
 export default async function LandingPage() {
   const [activeCount] = await Promise.all([
-    prisma.property.count({ where: { status: { in: PUBLIC_STATUSES } } }).catch(() => 0),
+    isNextBuild ? Promise.resolve(0) : prisma.property.count({ where: { status: { in: PUBLIC_STATUSES } } }).catch(() => 0),
   ]);
 
   const steps = [

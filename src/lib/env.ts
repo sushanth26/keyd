@@ -1,5 +1,7 @@
 // Centralized, validated environment access. Import `env` everywhere instead of
-// reaching into process.env directly, so misconfiguration fails fast and loudly.
+// reaching into process.env directly, so runtime misconfiguration fails fast and
+// loudly. `next build` is allowed to run with placeholders because Railway/Docker
+// often build before runtime service variables are injected.
 
 import { z } from "zod";
 
@@ -33,14 +35,31 @@ const schema = z.object({
     .transform((v) => parseInt(v, 10)),
 });
 
-// During `next build` the env may be partially present; parse leniently but keep types.
-const parsed = schema.safeParse(process.env);
+const isNextBuild =
+  process.env.NEXT_PHASE === "phase-production-build" ||
+  process.env.npm_lifecycle_event === "build";
 
-if (!parsed.success && process.env.NODE_ENV !== "production") {
+const buildFallbackEnv = isNextBuild
+  ? {
+      DATABASE_URL:
+        process.env.DATABASE_URL ??
+        "postgresql://build:build@localhost:5432/keyd_build_placeholder?schema=public",
+      AUTH_SECRET:
+        process.env.AUTH_SECRET ??
+        "build-time-placeholder-secret-change-me-please",
+    }
+  : {};
+
+if (isNextBuild) {
+  process.env.DATABASE_URL = buildFallbackEnv.DATABASE_URL;
+  process.env.AUTH_SECRET = buildFallbackEnv.AUTH_SECRET;
+}
+
+const parsed = schema.safeParse({ ...buildFallbackEnv, ...process.env });
+
+if (!parsed.success && (process.env.NODE_ENV !== "production" || isNextBuild)) {
   // eslint-disable-next-line no-console
   console.warn("[env] Some environment variables are missing or invalid:", parsed.error.flatten().fieldErrors);
 }
 
-export const env = parsed.success
-  ? parsed.data
-  : (schema.parse({ ...process.env, AUTH_SECRET: process.env.AUTH_SECRET ?? "build-time-placeholder-secret" }));
+export const env = parsed.success ? parsed.data : schema.parse(process.env);
