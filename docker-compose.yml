@@ -1,0 +1,65 @@
+# Docker-based local development for Keyd.
+#
+#   docker compose up -d db      # start just Postgres, run the app on the host
+#   docker compose up            # start Postgres + the app + the worker
+#
+# The app and worker share one image (modular monolith) and differ only by command.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: keyd
+      POSTGRES_PASSWORD: keyd
+      POSTGRES_DB: keyd
+    ports:
+      - "5432:5432"
+    volumes:
+      - keyd_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keyd -d keyd"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    command: sh -c "npx prisma migrate deploy && npm run db:seed && npm run dev"
+    environment:
+      DATABASE_URL: postgresql://keyd:keyd@db:5432/keyd?schema=public
+      WORKER_IN_PROCESS: "false" # dedicated worker service handles jobs
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - keyd_storage:/app/storage
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    command: sh -c "npx prisma migrate deploy && npm run worker"
+    environment:
+      DATABASE_URL: postgresql://keyd:keyd@db:5432/keyd?schema=public
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - keyd_storage:/app/storage
+
+volumes:
+  keyd_pgdata:
+  keyd_storage:

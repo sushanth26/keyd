@@ -1,0 +1,743 @@
+// Keyd — data model for an AI-first, direct owner-to-buyer home marketplace.
+// Modular monolith: one PostgreSQL database, one Prisma schema, logical domains grouped by section.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum Role {
+  SELLER
+  BUYER
+  ADMIN
+}
+
+enum IdentityStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum VerificationTokenType {
+  EMAIL
+  PHONE
+}
+
+enum VerificationKind {
+  IDENTITY // seller identity
+  OWNERSHIP // seller owns the specific property
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NEEDS_INFO
+}
+
+/// Deterministic property lifecycle. Transitions are enforced in code (src/domain/lifecycle).
+enum PropertyStatus {
+  DRAFT
+  VERIFICATION_PENDING
+  NEEDS_ATTENTION
+  READY_FOR_REVIEW
+  ACTIVE
+  BUYER_INTEREST_RECEIVED
+  UNDER_CONTRACT
+  SOLD
+  PAUSED
+  WITHDRAWN
+}
+
+enum PropertyType {
+  SINGLE_FAMILY
+  TOWNHOUSE
+  CONDO
+  MULTI_FAMILY
+  LAND
+  OTHER
+}
+
+enum AiContentStatus {
+  NONE
+  GENERATED
+  APPROVED
+}
+
+/// Where a stored fact came from — required for AI/enrichment provenance.
+enum ProvenanceSource {
+  SELLER
+  AI
+  ENRICHMENT
+  VERIFICATION
+  SYSTEM
+}
+
+enum RecommendationSeverity {
+  INFO
+  WARNING
+  BLOCKER
+}
+
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  NEEDS_ATTENTION
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+enum DocType {
+  DISCLOSURE
+  TITLE
+  INSPECTION
+  SURVEY
+  PREAPPROVAL
+  PROOF_OF_FUNDS
+  OTHER
+}
+
+enum FinancingType {
+  CASH
+  CONVENTIONAL
+  FHA
+  VA
+  OTHER
+}
+
+enum PreapprovalStatus {
+  NONE
+  IN_PROGRESS
+  PREAPPROVED
+  PROOF_OF_FUNDS
+}
+
+enum MoveInTimeframe {
+  IMMEDIATE
+  WITHIN_3_MONTHS
+  WITHIN_6_MONTHS
+  FLEXIBLE
+}
+
+enum FinancingReadiness {
+  NOT_STARTED
+  PREQUALIFIED
+  PREAPPROVED
+  CASH_VERIFIED
+}
+
+enum ShowingStatus {
+  REQUESTED
+  CONFIRMED
+  DECLINED
+  RESCHEDULE_PROPOSED
+  CANCELLED
+  COMPLETED
+}
+
+enum BuyerInterestStatus {
+  SUBMITTED
+  SELLER_VIEWED
+  WITHDRAWN
+}
+
+enum ReportReason {
+  FRAUD
+  INACCURATE
+  SPAM
+  INAPPROPRIATE
+  DUPLICATE
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum ActorType {
+  USER
+  ADMIN
+  SYSTEM
+  AI
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum NotificationType {
+  VERIFICATION_REQUIRED
+  LISTING_READY_FOR_REVIEW
+  MISSING_LISTING_INFO
+  LISTING_PUBLISHED
+  NEW_BUYER_MATCH
+  NEW_INQUIRY
+  SHOWING_REQUEST
+  SHOWING_CONFIRMATION
+  SHOWING_RESCHEDULE
+  BUYER_INTEREST_SUBMITTED
+  WORKFLOW_FAILURE
+}
+
+/// Marketplace funnel analytics events.
+enum AnalyticsEventType {
+  SELLER_REGISTERED
+  LISTING_STARTED
+  LISTING_COMPLETED
+  LISTING_VERIFIED
+  LISTING_PUBLISHED
+  PROPERTY_VIEWED
+  PROPERTY_SAVED
+  BUYER_REGISTERED
+  BUYER_MATCHED
+  INQUIRY_CREATED
+  SHOWING_REQUESTED
+  SHOWING_COMPLETED
+  BUYER_INTEREST_SUBMITTED
+  PROPERTY_UNDER_CONTRACT
+  PROPERTY_SOLD
+  LISTING_PAUSED
+  LISTING_WITHDRAWN
+}
+
+// ============================================================================
+// Identity & accounts
+// ============================================================================
+
+model User {
+  id             String         @id @default(cuid())
+  email          String         @unique
+  phone          String?
+  passwordHash   String
+  fullName       String
+  role           Role
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  identityStatus IdentityStatus @default(UNVERIFIED)
+  isBlocked      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  buyerProfile        BuyerProfile?
+  properties          Property[]           @relation("SellerProperties")
+  verificationTokens  VerificationToken[]
+  identityVerifications IdentityVerification[] @relation("SubjectVerifications")
+  reviewedVerifications IdentityVerification[] @relation("ReviewerVerifications")
+  savedSearches       SavedSearch[]
+  favorites           Favorite[]
+  buyerConversations  Conversation[]       @relation("BuyerConversations")
+  sellerConversations Conversation[]       @relation("SellerConversations")
+  messages            Message[]
+  buyerShowings       ShowingRequest[]     @relation("BuyerShowings")
+  sellerShowings      ShowingRequest[]     @relation("SellerShowings")
+  buyerInterests      BuyerInterest[]
+  matches             BuyerMatch[]
+  notifications       Notification[]
+  reportsMade         Report[]             @relation("Reporter")
+  reportsAgainst      Report[]             @relation("ReportedUser")
+
+  @@index([role])
+}
+
+model VerificationToken {
+  id        String                @id @default(cuid())
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      VerificationTokenType
+  codeHash  String // store hashed OTP, never the raw code
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime              @default(now())
+
+  @@index([userId, type])
+}
+
+/// Seller identity and per-property ownership verification via a provider interface.
+model IdentityVerification {
+  id          String             @id @default(cuid())
+  subjectId   String
+  subject     User               @relation("SubjectVerifications", fields: [subjectId], references: [id], onDelete: Cascade)
+  propertyId  String?
+  property    Property?          @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  kind        VerificationKind
+  provider    String
+  status      VerificationStatus @default(PENDING)
+  referenceId String? // provider-side reference
+  evidence    Json? // provider evidence / mock payload
+  confidence  Float? // provider confidence 0..1
+  notes       String?
+  reviewedById String?
+  reviewedBy  User?              @relation("ReviewerVerifications", fields: [reviewedById], references: [id])
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([subjectId])
+  @@index([propertyId])
+  @@index([status])
+}
+
+// ============================================================================
+// Buyer preferences & saved searches
+// ============================================================================
+
+model BuyerProfile {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredCities    String[]
+  minPrice           Int?
+  maxPrice           Int?
+  minBedrooms        Int?
+  minBathrooms       Float?
+  propertyTypes      PropertyType[]
+  moveInTimeframe    MoveInTimeframe?
+  financingReadiness FinancingReadiness  @default(NOT_STARTED)
+  desiredFeatures    String[]
+  notifyOnMatch      Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model SavedSearch {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  filters       Json // { city, minPrice, maxPrice, minBeds, minBaths, type, features }
+  notifyEnabled Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================================
+// Property + listing content
+// ============================================================================
+
+model Property {
+  id         String         @id @default(cuid())
+  slug       String         @unique
+  sellerId   String
+  seller     User           @relation("SellerProperties", fields: [sellerId], references: [id], onDelete: Cascade)
+  status     PropertyStatus @default(DRAFT)
+
+  // Address & geo
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String  @default("TX")
+  zip          String
+  lat          Float?
+  lng          Float?
+
+  // Facts
+  askingPrice  Int?
+  bedrooms     Int?
+  bathrooms    Float?
+  squareFeet   Int?
+  lotSizeSqft  Int?
+  yearBuilt    Int?
+  propertyType PropertyType @default(SINGLE_FAMILY)
+  garageSpaces Int?
+  stories      Int?
+  hoaFeeMonthly Int?
+
+  features      String[] // e.g. "Updated Kitchen", "Pool", "Solar"
+  improvements  String? // free text: recent improvements
+  disclosures   Json? // checklist: [{ key, label, acknowledged }]
+  showingAvailability Json? // [{ dayOfWeek, start, end }] weekly windows
+
+  // AI-generated content (seller must approve before publish)
+  aiContentStatus AiContentStatus @default(NONE)
+  headline        String?
+  description     String?
+  highlights      String[]
+  buyerFaq        Json? // [{ question, answer }]
+  socialCaptions  Json? // { short, long, twitter, facebook, instagram }
+  openHouseCopy   String?
+  emailSummary    String?
+  contentApprovedAt DateTime?
+  contentApprovedById String?
+
+  // Readiness
+  readinessScore     Int? // 0..100
+  readinessBreakdown Json? // { components: [...], warnings: [...] }
+  readinessComputedAt DateTime?
+
+  publishedAt DateTime?
+  soldAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  photos          PropertyPhoto[]
+  documents       PropertyDocument[]
+  provenance      DataProvenance[]
+  enrichments     EnrichmentRecord[]
+  recommendations SellerRecommendation[]
+  verifications   IdentityVerification[]
+  workflowRuns    WorkflowRun[]
+  transitions     StatusTransition[]
+  conversations   Conversation[]
+  showings        ShowingRequest[]
+  buyerInterests  BuyerInterest[]
+  favorites       Favorite[]
+  matches         BuyerMatch[]
+  reports         Report[]
+
+  @@index([status])
+  @@index([city])
+  @@index([askingPrice])
+  @@index([sellerId])
+}
+
+model PropertyPhoto {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  storageKey String // key within the object-storage abstraction
+  caption    String?
+  position   Int      @default(0)
+  width      Int?
+  height     Int?
+  aiQualityScore Float? // optional AI-assessed quality 0..1
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId, position])
+}
+
+/// Private supporting documents. Served ONLY through an authz-gated route handler.
+model PropertyDocument {
+  id           String   @id @default(cuid())
+  propertyId   String
+  property     Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  storageKey   String
+  filename     String
+  docType      DocType  @default(OTHER)
+  contentType  String
+  sizeBytes    Int
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  @@index([propertyId])
+}
+
+/// Provenance for every AI-generated or externally-enriched fact: source, timestamp, confidence.
+model DataProvenance {
+  id         String           @id @default(cuid())
+  propertyId String
+  property   Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  field      String // e.g. "headline", "estimatedValue", "ownershipVerified"
+  value      String? // stringified snapshot of the value
+  source     ProvenanceSource
+  provider   String?
+  confidence Float? // 0..1
+  createdAt  DateTime         @default(now())
+
+  @@index([propertyId, field])
+}
+
+/// Result of the property-data enrichment provider (mock/seeded for the MVP).
+model EnrichmentRecord {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  provider   String
+  data       Json // { estimatedValueLow, estimatedValueHigh, comparables[], neighborhood, schoolRating }
+  confidence Float?
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+}
+
+/// Recommended seller actions produced by the AI workflow / readiness engine.
+model SellerRecommendation {
+  id         String                 @id @default(cuid())
+  propertyId String
+  property   Property               @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  code       String // stable code e.g. "ADD_PHOTOS"
+  title      String
+  detail     String
+  severity   RecommendationSeverity @default(INFO)
+  category   String // "photos" | "info" | "verification" | "pricing" | "disclosure"
+  resolvedAt DateTime?
+  createdAt  DateTime               @default(now())
+
+  @@unique([propertyId, code])
+  @@index([propertyId])
+}
+
+// ============================================================================
+// Lifecycle audit & workflow
+// ============================================================================
+
+model StatusTransition {
+  id         String         @id @default(cuid())
+  propertyId String
+  property   Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  fromStatus PropertyStatus?
+  toStatus   PropertyStatus
+  reason     String?
+  actorType  ActorType
+  actorId    String?
+  createdAt  DateTime       @default(now())
+
+  @@index([propertyId])
+}
+
+/// Idempotent onboarding workflow run for a property (property.created).
+model WorkflowRun {
+  id             String         @id @default(cuid())
+  propertyId     String
+  property       Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  type           String         @default("property.onboarding")
+  idempotencyKey String         @unique
+  status         WorkflowStatus @default(PENDING)
+  currentStep    String?
+  steps          Json // [{ name, status, startedAt, finishedAt, output, error }]
+  attempts       Int            @default(0)
+  error          String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([propertyId])
+  @@index([status])
+}
+
+// ============================================================================
+// Background jobs & event bus
+// ============================================================================
+
+model Job {
+  id             String    @id @default(cuid())
+  type           String
+  payload        Json
+  status         JobStatus @default(QUEUED)
+  runAt          DateTime  @default(now())
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  lastError      String?
+  lockedAt       DateTime?
+  lockedBy       String?
+  idempotencyKey String?   @unique
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, runAt])
+}
+
+model DomainEvent {
+  id          String    @id @default(cuid())
+  type        String // e.g. "property.created"
+  payload     Json
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([type])
+}
+
+// ============================================================================
+// Discovery: favorites & matching
+// ============================================================================
+
+model Favorite {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, propertyId])
+  @@index([propertyId])
+}
+
+model BuyerMatch {
+  id         String   @id @default(cuid())
+  buyerId    String
+  buyer      User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  score      Float // 0..1
+  reasons    Json // [{ factor, detail }]
+  notifiedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@unique([buyerId, propertyId])
+  @@index([propertyId])
+}
+
+// ============================================================================
+// Messaging & showings
+// ============================================================================
+
+model Conversation {
+  id            String   @id @default(cuid())
+  propertyId    String
+  property      Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  buyerId       String
+  buyer         User     @relation("BuyerConversations", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation("SellerConversations", fields: [sellerId], references: [id], onDelete: Cascade)
+  lastMessageAt DateTime @default(now())
+  buyerBlocked  Boolean  @default(false) // seller blocked the buyer
+  sellerBlocked Boolean  @default(false) // buyer blocked the seller
+  createdAt     DateTime @default(now())
+
+  messages Message[]
+
+  @@unique([propertyId, buyerId])
+  @@index([sellerId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  body           String // sanitized + contact-info redacted at write time
+  redacted       Boolean      @default(false) // true if we stripped contact details
+  flaggedSpam    Boolean      @default(false)
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model ShowingRequest {
+  id            String        @id @default(cuid())
+  propertyId    String
+  property      Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  buyerId       String
+  buyer         User          @relation("BuyerShowings", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User          @relation("SellerShowings", fields: [sellerId], references: [id], onDelete: Cascade)
+  proposedSlots Json // [ISO datetime strings] proposed by buyer
+  confirmedStart DateTime?
+  status        ShowingStatus @default(REQUESTED)
+  buyerMessage  String?
+  sellerResponse String?
+  reminderSentAt DateTime?
+  feedback      Json? // post-showing: { rating, comments, interested }
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([propertyId])
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+// ============================================================================
+// Buyer interest (structured, non-binding)
+// ============================================================================
+
+model BuyerInterest {
+  id                String              @id @default(cuid())
+  propertyId        String
+  property          Property            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  buyerId           String
+  buyer             User                @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  proposedPrice     Int
+  financingType     FinancingType
+  downPayment       Int?
+  preapprovalStatus PreapprovalStatus   @default(NONE)
+  preferredClosingDate DateTime?
+  contingencies     String[] // e.g. "Inspection", "Financing", "Appraisal", "Sale of home"
+  message           String?
+  status            BuyerInterestStatus @default(SUBMITTED)
+  acknowledgedNonBinding Boolean        @default(true) // buyer checked the non-binding disclaimer
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([propertyId])
+  @@index([buyerId])
+}
+
+// ============================================================================
+// Trust & safety: reports, notifications, audit, analytics
+// ============================================================================
+
+model Report {
+  id             String       @id @default(cuid())
+  reporterId     String?
+  reporter       User?        @relation("Reporter", fields: [reporterId], references: [id])
+  propertyId     String?
+  property       Property?    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  reportedUserId String?
+  reportedUser   User?        @relation("ReportedUser", fields: [reportedUserId], references: [id])
+  reason         ReportReason
+  details        String?
+  status         ReportStatus @default(OPEN)
+  resolutionNotes String?
+  handledById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status])
+  @@index([propertyId])
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  title       String
+  body        String
+  data        Json?
+  readAt      DateTime?
+  emailStatus EmailStatus?
+  createdAt   DateTime         @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/// Append-only audit trail. Application code never updates or deletes rows here.
+model AuditLog {
+  id         String    @id @default(cuid())
+  actorType  ActorType
+  actorId    String?
+  action     String // e.g. "property.published", "verification.approved"
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
+model AnalyticsEvent {
+  id         String             @id @default(cuid())
+  type       AnalyticsEventType
+  userId     String?
+  propertyId String?
+  properties Json?
+  createdAt  DateTime           @default(now())
+
+  @@index([type, createdAt])
+}
