@@ -30,6 +30,15 @@ interface SP {
   type?: string;
 }
 
+function loadSearch(where: Prisma.PropertyWhereInput) {
+  return prisma.property.findMany({
+    where,
+    orderBy: { publishedAt: "desc" },
+    include: { photos: { orderBy: { position: "asc" }, take: 1 } },
+    take: 60,
+  });
+}
+
 export default async function SearchPage({ searchParams }: { searchParams: SP }) {
   const user = await getCurrentUser();
   const where: Prisma.PropertyWhereInput = { status: { in: PUBLIC_STATUSES } };
@@ -42,12 +51,13 @@ export default async function SearchPage({ searchParams }: { searchParams: SP })
   if (searchParams.beds) where.bedrooms = { gte: Number(searchParams.beds) };
   if (searchParams.baths) where.bathrooms = { gte: Number(searchParams.baths) };
 
-  const properties = await prisma.property.findMany({
-    where,
-    orderBy: { publishedAt: "desc" },
-    include: { photos: { orderBy: { position: "asc" }, take: 1 } },
-    take: 60,
-  });
+  // Degrade gracefully to an empty result set if the database is unavailable.
+  let properties: Awaited<ReturnType<typeof loadSearch>> = [];
+  try {
+    properties = await loadSearch(where);
+  } catch {
+    properties = [];
+  }
 
   return (
     <div className="container-page py-6">

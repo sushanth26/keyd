@@ -4,7 +4,7 @@ import { isPubliclyVisible } from "@/domain/lifecycle";
 import { formatCurrency, baths, formatNumber } from "@/lib/format";
 import { mediaUrl } from "@/lib/media";
 import { qrDataUrl } from "@/lib/qr";
-import { env } from "@/lib/env";
+import { propertyUrl } from "@/lib/seo/urls";
 import { noindexMetadata } from "@/lib/seo/metadata";
 import type { Metadata } from "next";
 
@@ -12,12 +12,14 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = noindexMetadata;
 
 export default async function FlyerPage({ params }: { params: { slug: string } }) {
-  const property = await prisma.property.findUnique({
-    where: { slug: params.slug },
-    include: { photos: { orderBy: { position: "asc" }, take: 4 }, seller: { select: { fullName: true } } },
-  });
+  const property = await prisma.property
+    .findUnique({
+      where: { slug: params.slug },
+      include: { photos: { orderBy: { position: "asc" }, take: 4 }, seller: { select: { fullName: true } } },
+    })
+    .catch(() => null);
   if (!property || !isPubliclyVisible(property.status)) notFound();
-  const qr = await qrDataUrl(`${env.APP_URL}/p/${property.slug}`);
+  const qr = await qrDataUrl(propertyUrl(property));
 
   return (
     <div className="mx-auto max-w-3xl bg-white p-8 print:p-0">
@@ -56,7 +58,7 @@ export default async function FlyerPage({ params }: { params: { slug: string } }
 
       <div className="mt-6 flex items-center justify-between border-t border-slate-200 pt-4 text-sm text-slate-500">
         <p>Listed directly by {property.seller.fullName} on Keyd</p>
-        <p className="font-semibold text-brand-700">{env.APP_URL}/p/{property.slug}</p>
+        <p className="font-semibold text-brand-700">{propertyUrl(property)}</p>
       </div>
       <p className="mt-2 text-[10px] text-slate-400">Keyd is not a brokerage and does not provide legal, appraisal, escrow, or title services. Scan the QR code to contact the owner and schedule a showing.</p>
 

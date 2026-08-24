@@ -8,11 +8,22 @@ import { breadcrumbJsonLd, itemListJsonLd } from "@/lib/seo/jsonld";
 import { cityIntro, getCitiesWithInventory, getLocationStats, getStatesWithInventory, stateIntro } from "@/lib/seo/locations";
 import { cityPath, homesForSalePath, propertyPath, statePath } from "@/lib/seo/urls";
 import { formatCurrency } from "@/lib/format";
+import { logger } from "@/lib/logger";
 import { TrackOnMount } from "@/components/analytics/track-on-mount";
+import type { Prisma } from "@prisma/client";
 
 interface Props {
   state?: string;
   city?: string;
+}
+
+function loadProperties(where: Prisma.PropertyWhereInput) {
+  return prisma.property.findMany({
+    where,
+    orderBy: [{ publishedAt: "desc" }, { updatedAt: "desc" }],
+    include: { photos: { orderBy: { position: "asc" }, take: 1 } },
+    take: 60,
+  });
 }
 
 function heading({ state, city }: Props): string {
@@ -23,17 +34,22 @@ function heading({ state, city }: Props): string {
 
 export async function LocationListingPage({ state, city }: Props) {
   const where = { status: { in: PUBLIC_STATUSES }, ...(state ? { state } : {}), ...(city ? { city } : {}) };
-  const [properties, states, cities, stats] = await Promise.all([
-    prisma.property.findMany({
-      where,
-      orderBy: [{ publishedAt: "desc" }, { updatedAt: "desc" }],
-      include: { photos: { orderBy: { position: "asc" }, take: 1 } },
-      take: 60,
-    }),
-    getStatesWithInventory(),
-    getCitiesWithInventory(state),
-    state ? getLocationStats({ state, city }) : null,
-  ]);
+
+  // A database outage degrades to an empty, still-useful page instead of a crash.
+  let properties: Awaited<ReturnType<typeof loadProperties>> = [];
+  let states: Awaited<ReturnType<typeof getStatesWithInventory>> = [];
+  let cities: Awaited<ReturnType<typeof getCitiesWithInventory>> = [];
+  let stats: Awaited<ReturnType<typeof getLocationStats>> | null = null;
+  try {
+    [properties, states, cities, stats] = await Promise.all([
+      loadProperties(where),
+      getStatesWithInventory(),
+      getCitiesWithInventory(state),
+      state ? getLocationStats({ state, city }) : Promise.resolve(null),
+    ]);
+  } catch (err) {
+    logger.error("location_page.db_error", { error: err instanceof Error ? err.message : String(err), state, city });
+  }
 
   const title = heading({ state, city });
   const intro = state && city

@@ -5,6 +5,7 @@
 //   • withdrawn/sold listing → 410 Gone (permanently removed)
 //   • unknown/unpublished    → 404 Not Found
 import { NextResponse } from "next/server";
+import type { PropertyStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { isPubliclyVisible } from "@/domain/lifecycle";
 import { propertyUrl } from "@/lib/seo/urls";
@@ -12,10 +13,15 @@ import { propertyUrl } from "@/lib/seo/urls";
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
-  const property = await prisma.property.findUnique({
-    where: { slug: params.slug },
-    select: { id: true, slug: true, city: true, state: true, status: true },
-  });
+  let property: { id: string; slug: string; city: string; state: string; status: PropertyStatus } | null = null;
+  try {
+    property = await prisma.property.findUnique({
+      where: { slug: params.slug },
+      select: { id: true, slug: true, city: true, state: true, status: true },
+    });
+  } catch {
+    return new NextResponse("Service temporarily unavailable", { status: 503 });
+  }
   if (!property) return new NextResponse("Not found", { status: 404 });
   if (property.status === "WITHDRAWN" || property.status === "SOLD") {
     return new NextResponse("This listing has been permanently removed.", { status: 410 });

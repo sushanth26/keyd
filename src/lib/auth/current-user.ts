@@ -3,15 +3,23 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { Role, User } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { readSession } from "./session";
 
 /// Resolve the authenticated user from the session cookie (cached per request).
+/// A DB error here degrades to "logged out" rather than crashing every page (the
+/// header/footer in the root layout call this on every request).
 export const getCurrentUser = cache(async (): Promise<User | null> => {
   const session = await readSession();
   if (!session) return null;
-  const user = await prisma.user.findUnique({ where: { id: session.sub } });
-  if (!user || user.isBlocked) return null;
-  return user;
+  try {
+    const user = await prisma.user.findUnique({ where: { id: session.sub } });
+    if (!user || user.isBlocked) return null;
+    return user;
+  } catch (err) {
+    logger.error("getCurrentUser.db_error", { error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
 });
 
 /// Require any authenticated user; redirect to login otherwise.
