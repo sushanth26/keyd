@@ -3,12 +3,27 @@
 // `noindex,follow` to avoid thin/doorway pages.
 import { prisma } from "@/lib/db";
 import { PUBLIC_STATUSES } from "@/domain/lifecycle";
+import { MARKET_CITIES } from "@/domain/constants";
 import { citySlug, stateSlug } from "./urls";
 import { formatCurrency } from "@/lib/format";
 import { logger } from "@/lib/logger";
 
 /** Minimum active listings for a location page to be indexed. */
 export const MIN_LISTINGS_TO_INDEX = 1;
+
+/** The launch market. Known locations render an accessible (noindex) page even with
+ *  zero inventory, so internal links to them never 404. */
+const KNOWN_STATE = "TX";
+
+export function resolveKnownState(stateSlugParam: string): string | null {
+  return stateSlug(KNOWN_STATE) === stateSlugParam ? KNOWN_STATE : null;
+}
+
+export function resolveKnownCity(stateSlugParam: string, citySlugParam: string): { state: string; city: string } | null {
+  if (stateSlug(KNOWN_STATE) !== stateSlugParam) return null;
+  const city = MARKET_CITIES.find((c) => citySlug(c) === citySlugParam);
+  return city ? { state: KNOWN_STATE, city } : null;
+}
 
 const publicWhere = { status: { in: PUBLIC_STATUSES } } as const;
 

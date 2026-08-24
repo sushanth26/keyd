@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { LocationListingPage } from "@/components/location-listing-page";
 import { buildMetadata } from "@/lib/seo/metadata";
-import { findStateBySlug, getCitiesWithInventory, getLocationStats, MIN_LISTINGS_TO_INDEX, stateIntro } from "@/lib/seo/locations";
+import { findStateBySlug, getCitiesWithInventory, getLocationStats, resolveKnownState, MIN_LISTINGS_TO_INDEX, stateIntro } from "@/lib/seo/locations";
 import { statePath } from "@/lib/seo/urls";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 type Params = { state: string };
 
 async function resolveState(slug: string) {
-  const state = await findStateBySlug(slug);
+  // A state with inventory, or the known launch state even when empty (accessible, noindex).
+  const state = (await findStateBySlug(slug)) ?? resolveKnownState(slug);
   if (!state) return null;
   const canonical = statePath(state);
   if (`/homes-for-sale/${slug}` !== canonical) redirect(canonical);
