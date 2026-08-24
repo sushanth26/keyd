@@ -6,6 +6,12 @@ import { SiteFooter } from "@/components/site-footer";
 import { GaProvider } from "@/components/analytics/ga-provider";
 import { ConsentBanner } from "@/components/analytics/consent-banner";
 import { siteConfig } from "@/lib/seo/config";
+import { getCurrentUser } from "@/lib/auth/current-user";
+
+// The root layout renders a per-user header (Sign in vs. the signed-in account), so it
+// must render per request rather than be statically cached — otherwise the header shows
+// a stale logged-out state after login.
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.baseUrl),
@@ -31,11 +37,12 @@ export const metadata: Metadata = {
     : {}),
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
   return (
     <html lang="en">
       <body className="flex min-h-screen flex-col">
-        <SiteHeader />
+        <SiteHeader user={user} />
         <main className="flex-1">{children}</main>
         <SiteFooter />
         <ConsentBanner />
