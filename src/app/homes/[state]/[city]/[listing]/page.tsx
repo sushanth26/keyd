@@ -26,12 +26,17 @@ function typeLabel(t: string): string {
 async function loadPublicProperty(listingSeg: string) {
   const id = listingIdFromSegment(listingSeg);
   if (!id) return null;
-  const property = await prisma.property.findUnique({
-    where: { id },
-    include: { photos: { orderBy: { position: "asc" } }, seller: { select: { fullName: true, identityStatus: true } } },
-  });
-  if (!property || !isPubliclyVisible(property.status)) return null;
-  return property;
+  try {
+    const property = await prisma.property.findUnique({
+      where: { id },
+      include: { photos: { orderBy: { position: "asc" } }, seller: { select: { fullName: true, identityStatus: true } } },
+    });
+    if (!property || !isPubliclyVisible(property.status)) return null;
+    return property;
+  } catch {
+    // DB unavailable → treat as not-found (404) rather than crashing with a 500.
+    return null;
+  }
 }
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {

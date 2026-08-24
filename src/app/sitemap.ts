@@ -24,11 +24,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [states, cities, properties] = await Promise.all([
     getStatesWithInventory(),
     getCitiesWithInventory(),
-    prisma.property.findMany({
-      where: { status: { in: PUBLIC_STATUSES } },
-      select: { id: true, slug: true, city: true, state: true, updatedAt: true },
-      orderBy: { updatedAt: "desc" },
-    }),
+    prisma.property
+      .findMany({
+        where: { status: { in: PUBLIC_STATUSES } },
+        select: { id: true, slug: true, city: true, state: true, updatedAt: true },
+        orderBy: { updatedAt: "desc" },
+      })
+      .catch(() => [] as { id: string; slug: string; city: string; state: string; updatedAt: Date }[]),
   ]);
 
   const stateEntries: MetadataRoute.Sitemap = states

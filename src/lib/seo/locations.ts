@@ -5,11 +5,23 @@ import { prisma } from "@/lib/db";
 import { PUBLIC_STATUSES } from "@/domain/lifecycle";
 import { citySlug, stateSlug } from "./urls";
 import { formatCurrency } from "@/lib/format";
+import { logger } from "@/lib/logger";
 
 /** Minimum active listings for a location page to be indexed. */
 export const MIN_LISTINGS_TO_INDEX = 1;
 
 const publicWhere = { status: { in: PUBLIC_STATUSES } } as const;
+
+// Location queries are used by pages, metadata, and the sitemap. A DB error must
+// never crash them — return a safe fallback and log instead.
+async function safe<T>(fn: () => Promise<T>, fallback: T, label: string): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    logger.error(`locations.${label}.db_error`, { error: err instanceof Error ? err.message : String(err) });
+    return fallback;
+  }
+}
 
 export interface StateInventory {
   state: string;
@@ -24,21 +36,33 @@ export interface CityInventory {
 }
 
 export async function getStatesWithInventory(): Promise<StateInventory[]> {
-  const rows = await prisma.property.groupBy({ by: ["state"], where: publicWhere, _count: { _all: true } });
-  return rows
-    .map((r) => ({ state: r.state, slug: stateSlug(r.state), count: r._count._all }))
-    .sort((a, b) => b.count - a.count);
+  return safe(
+    async () => {
+      const rows = await prisma.property.groupBy({ by: ["state"], where: publicWhere, _count: { _all: true } });
+      return rows
+        .map((r) => ({ state: r.state, slug: stateSlug(r.state), count: r._count._all }))
+        .sort((a, b) => b.count - a.count);
+    },
+    [],
+    "getStatesWithInventory",
+  );
 }
 
 export async function getCitiesWithInventory(state?: string): Promise<CityInventory[]> {
-  const rows = await prisma.property.groupBy({
-    by: ["city", "state"],
-    where: state ? { ...publicWhere, state } : publicWhere,
-    _count: { _all: true },
-  });
-  return rows
-    .map((r) => ({ city: r.city, state: r.state, slug: citySlug(r.city), count: r._count._all }))
-    .sort((a, b) => b.count - a.count);
+  return safe(
+    async () => {
+      const rows = await prisma.property.groupBy({
+        by: ["city", "state"],
+        where: state ? { ...publicWhere, state } : publicWhere,
+        _count: { _all: true },
+      });
+      return rows
+        .map((r) => ({ city: r.city, state: r.state, slug: citySlug(r.city), count: r._count._all }))
+        .sort((a, b) => b.count - a.count);
+    },
+    [],
+    "getCitiesWithInventory",
+  );
 }
 
 export async function findStateBySlug(slug: string): Promise<string | null> {
@@ -58,13 +82,19 @@ export interface LocationStats {
 }
 
 export async function getLocationStats(where: { state: string; city?: string }): Promise<LocationStats> {
-  const agg = await prisma.property.aggregate({
-    where: { ...publicWhere, state: where.state, ...(where.city ? { city: where.city } : {}) },
-    _count: { _all: true },
-    _min: { askingPrice: true },
-    _max: { askingPrice: true },
-  });
-  return { count: agg._count._all, minPrice: agg._min.askingPrice, maxPrice: agg._max.askingPrice };
+  return safe(
+    async () => {
+      const agg = await prisma.property.aggregate({
+        where: { ...publicWhere, state: where.state, ...(where.city ? { city: where.city } : {}) },
+        _count: { _all: true },
+        _min: { askingPrice: true },
+        _max: { askingPrice: true },
+      });
+      return { count: agg._count._all, minPrice: agg._min.askingPrice, maxPrice: agg._max.askingPrice };
+    },
+    { count: 0, minPrice: null, maxPrice: null },
+    "getLocationStats",
+  );
 }
 
 /** Unique, data-derived intro copy for a city page (kept distinct per city). */
