@@ -16,10 +16,12 @@ export const metadata: Metadata = noindexMetadata;
 const CONTINGENCIES = ["Inspection", "Financing", "Appraisal", "Sale of current home", "Title review"];
 
 export default async function BuyerInterestPage({ params }: { params: { slug: string } }) {
-  const property = await prisma.property.findUnique({
-    where: { slug: params.slug },
-    include: { photos: { orderBy: { position: "asc" }, take: 1 } },
-  });
+  const property = await prisma.property
+    .findUnique({
+      where: { slug: params.slug },
+      include: { photos: { orderBy: { position: "asc" }, take: 1 } },
+    })
+    .catch(() => null);
   if (!property || !isPubliclyVisible(property.status)) notFound();
 
   const user = await getCurrentUser();
