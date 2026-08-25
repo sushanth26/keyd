@@ -130,6 +130,15 @@ async function clear() {
 }
 
 async function main() {
+  // Safe for boot/CI: when SEED_SKIP_IF_POPULATED=true, do nothing if data already
+  // exists (never wipes a live database). Local `npm run db:seed` always reseeds.
+  if (process.env.SEED_SKIP_IF_POPULATED === "true") {
+    const existingUsers = await prisma.user.count().catch(() => 0);
+    if (existingUsers > 0) {
+      console.log(`Seed skipped: ${existingUsers} users already exist (SEED_SKIP_IF_POPULATED=true).`);
+      return;
+    }
+  }
   console.log("Clearing existing data…");
   await clear();
   const passwordHash = await bcrypt.hash(PASSWORD, 10);

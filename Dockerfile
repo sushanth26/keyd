@@ -37,6 +37,11 @@ COPY --from=build /app/.next ./.next
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/tsconfig.json ./tsconfig.json
+# `src` is needed by the tsx-run seed script (SEED_ON_BOOT) which imports from src/.
+COPY --from=build /app/src ./src
 COPY package.json ./
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+# On boot: apply DB migrations (idempotent). If SEED_ON_BOOT=true, seed demo data
+# ONLY when the database is empty (never wipes existing data). Then start the server.
+CMD ["sh", "-c", "(npx prisma migrate deploy || echo 'migrate deploy failed, continuing') && if [ \"$SEED_ON_BOOT\" = \"true\" ]; then SEED_SKIP_IF_POPULATED=true npm run db:seed || echo 'seed skipped/failed'; fi; npm run start"]
