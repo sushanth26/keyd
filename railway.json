@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "sh -c 'npx prisma migrate deploy || echo migrate-failed; if [ \"$SEED_ON_BOOT\" = \"true\" ]; then SEED_SKIP_IF_POPULATED=true npm run db:seed || echo seed-failed; fi; npm run start'",
+    "startCommand": "sh -c 'npx prisma migrate deploy || echo migrate-failed; if [ \"$SEED_ON_BOOT\" = \"true\" ]; then SEED_SKIP_IF_POPULATED=true npm run db:seed || echo seed-failed; fi; (while true; do npm run worker || echo worker-crashed; sleep 3; done) & npm run start'",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   }
